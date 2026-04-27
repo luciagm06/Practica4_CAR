@@ -1,1 +1,4 @@
-# Practica4_CAR
+# Practica 4
+
+***Lucía González Mandler***
+***Sofía Pérez Vásquez***
