@@ -97,18 +97,45 @@ Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality)
 }
 
 int main(int argc, char **argv) {
-    if(argc == 1) {
-        std::cerr<<"Image filename missing from arguments. Usage ./dct <filename>"<<std::endl;
-        exit(1);
-    }
-    int block_size=8;
-    Image<unsigned char> image = load_from_file(argv[1]);
-    Image<unsigned char> srm3x3 = compute_srm(image, 3);
-    save_to_file("srm_kernel_3x3.png", srm3x3);
-    save_to_file("srm_kernel_5x5.png", compute_srm(image, 5));
-    save_to_file("ela.png", compute_ela(image, 90));
-    save_to_file("dct_invert.png", compute_dct(image, block_size, true));
-    save_to_file("dct_direct.png", compute_dct(image, block_size, false));
 
-    return 0;
+if(argc == 1) {
+    std::cerr<<"Image filename missing from arguments. Usage ./dct <filename>"<<std::endl;
+    exit(1);
+}
+
+int block_size = 8;
+Image<unsigned char> image = load_from_file(argv[1]);
+
+#pragma omp parallel sections
+{
+
+    #pragma omp section
+    {
+        Image<unsigned char> srm3x3 = compute_srm(image, 3);
+        save_to_file("srm_kernel_3x3.png", srm3x3);
+    }
+
+    #pragma omp section
+    {
+        save_to_file("srm_kernel_5x5.png", compute_srm(image, 5));
+    }
+
+    #pragma omp section
+    {
+        save_to_file("ela.png", compute_ela(image, 90));
+    }
+
+    #pragma omp section
+    {
+        save_to_file("dct_invert.png", compute_dct(image, block_size, true));
+    }
+
+    #pragma omp section
+    {
+        save_to_file("dct_direct.png", compute_dct(image, block_size, false));
+    }
+
+}
+
+return 0;
 }
