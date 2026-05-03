@@ -1,6 +1,8 @@
 /*
  * main.cc - Versión paralela del análisis forense de imágenes
- *
+ * Práctica 4: Paralelismo a nivel de hilos
+ * Computación de Alto Rendimiento - UA
+ * 
  * Estrategia de paralelización:
  *  - Paralelismo por tareas (std::async): ejecución simultánea de procesos independientes
  *  - Paralelismo de datos (OpenMP): distribución del trabajo interno en bucles
