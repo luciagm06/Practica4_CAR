@@ -1,7 +1,9 @@
 /*
- * main.cc - Versión paralela con OpenMP y std::async
- * Práctica 4: Paralelismo a nivel de hilos
- * Computación de Alto Rendimiento - UA
+ * main.cc - Versión paralela del análisis forense de imágenes
+ *
+ * Estrategia de paralelización:
+ *  - Paralelismo por tareas (std::async): ejecución simultánea de procesos independientes
+ *  - Paralelismo de datos (OpenMP): distribución del trabajo interno en bucles
  */
 
 #include <stdio.h>
@@ -20,7 +22,8 @@
 #include <omp.h>
 
 // ============================================================
-// Kernels SRM (sin cambios respecto a la versión secuencial)
+// Kernels SRM
+// Definen máscaras para detectar patrones de ruido en la imagen
 // ============================================================
 Image<float> get_srm_3x3() {
     Image<float> kernel(3, 3, 1);
@@ -46,9 +49,9 @@ Image<float> get_srm_kernel(int size) {
 }
 
 // ============================================================
-// compute_srm - Paralelizado con OpenMP en los bucles internos
-// de la convolución (dentro de image.h, se puede habilitar con
-// el flag, o bien se paraliza el bucle externo de filas aquí).
+// compute_srm
+// Aplica convolución con el kernel SRM.
+// Paralelismo: OpenMP distribuye filas de la imagen entre hilos
 // ============================================================
 Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_size) {
     auto begin = std::chrono::steady_clock::now();
@@ -61,7 +64,7 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
     int ks = kernel_size;
     Image<float> srm(w, h, 1);
 
-    // Paralelización OpenMP: cada hilo procesa un subconjunto de filas
+    // Convolución: cada hilo procesa filas independientes
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
@@ -78,7 +81,7 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
         }
     }
 
-    // abs y normalización: también paralelizables con OpenMP
+    // Valor absoluto y cálculo de min/max en paralelo
     float max_val = -1e9f, min_val = 1e9f;
     #pragma omp parallel for reduction(max:max_val) reduction(min:min_val)
     for (int j = 0; j < h; j++) {
@@ -90,9 +93,10 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
         }
     }
 
-    // Normalización y escala a [0,255]
+    // Normalización a rango [0,255]
     Image<unsigned char> result(w, h, 1);
     float range = (max_val - min_val > 0) ? (max_val - min_val) : 1.0f;
+
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
@@ -102,59 +106,60 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
     }
 
     auto end = std::chrono::steady_clock::now();
-    std::cout << "[SRM " << kernel_size << "x" << kernel_size << "] Tiempo: "
+    std::cout << "[SRM " << kernel_size << "] Tiempo: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()
-              << " ms (hilos: " << omp_get_max_threads() << ")" << std::endl;
+              << " ms" << std::endl;
     return result;
 }
 
 // ============================================================
-// compute_dct - Paralelizado con OpenMP sobre los bloques
-// Cada bloque es independiente -> paralelismo de datos perfecto
+// compute_dct
+// Divide la imagen en bloques independientes y aplica DCT.
+// Paralelismo: cada bloque se procesa de forma independiente
 // ============================================================
 Image<unsigned char> compute_dct(const Image<unsigned char> &image, int block_size, bool invert) {
     auto begin = std::chrono::steady_clock::now();
-    std::cout << "[DCT" << (invert ? " inv" : "") << " " << block_size << "x" << block_size
-              << "] Iniciando..." << std::endl;
 
     Image<float> grayscale = image.convert<float>().to_grayscale();
     std::vector<Block<float>> blocks = grayscale.get_blocks(block_size);
     int n_blocks = (int)blocks.size();
 
-    // Cada bloque es completamente independiente de los demás:
-    // paralelismo de datos con OpenMP. Cada hilo trabaja sobre
-    // su propia copia de dctBlock (variable privada).
+    // Paralelismo de datos sobre bloques
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < n_blocks; i++) {
         float **dctBlock = dct::create_matrix(block_size, block_size);
         dct::direct(dctBlock, blocks[i], 0);
+
         if (invert) {
             for (int k = 0; k < blocks[i].size / 2; k++)
                 for (int l = 0; l < blocks[i].size / 2; l++)
                     dctBlock[k][l] = 0.0f;
+
             dct::inverse(blocks[i], dctBlock, 0, 0.0, 255.);
         } else {
             dct::assign(dctBlock, blocks[i], 0);
         }
+
         dct::delete_matrix(dctBlock);
     }
 
     Image<unsigned char> result = grayscale.convert<unsigned char>();
+
     auto end = std::chrono::steady_clock::now();
-    std::cout << "[DCT" << (invert ? " inv" : "") << "] Tiempo: "
+    std::cout << "[DCT] Tiempo: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()
-              << " ms (hilos: " << omp_get_max_threads() << ")" << std::endl;
+              << " ms" << std::endl;
+
     return result;
 }
 
 // ============================================================
-// compute_ela - Limitada por I/O (escritura/lectura JPEG),
-// su paralelización interna es mínima; se paraleliza a nivel
-// funcional con std::async respecto a los demás procesos.
+// compute_ela
+// Detecta diferencias entre imagen original y recomprimida.
+// Limitado por operaciones de I/O.
 // ============================================================
 Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality) {
     auto begin = std::chrono::steady_clock::now();
-    std::cout << "[ELA q=" << quality << "] Iniciando..." << std::endl;
 
     Image<unsigned char> grayscale = image.to_grayscale();
     save_to_file("_temp.jpg", grayscale, quality);
@@ -164,16 +169,14 @@ Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality)
     Image<float> gray_f = grayscale.convert<float>();
     Image<float> diff(w, h, 1);
 
-    // Diferencia pixel a pixel: paralelizable con OpenMP
+    // Diferencia por píxel
     #pragma omp parallel for schedule(static)
-    for (int j = 0; j < h; j++) {
-        for (int i = 0; i < w; i++) {
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
             diff.set(j, i, 0, std::abs(compressed.get(j, i, 0) - gray_f.get(j, i, 0)));
-        }
-    }
 
-    // Normalización
     float max_val = -1e9f, min_val = 1e9f;
+
     #pragma omp parallel for reduction(max:max_val) reduction(min:min_val)
     for (int j = 0; j < h; j++)
         for (int i = 0; i < w; i++) {
@@ -184,6 +187,7 @@ Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality)
 
     float range = (max_val - min_val > 0) ? (max_val - min_val) : 1.0f;
     Image<unsigned char> result(w, h, 1);
+
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < h; j++)
         for (int i = 0; i < w; i++)
@@ -193,14 +197,16 @@ Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality)
     std::cout << "[ELA] Tiempo: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()
               << " ms" << std::endl;
+
     return result;
 }
 
 // ============================================================
-// main - Paralelismo funcional con std::async
-// SRM 3x3, SRM 5x5 y ELA no tienen dependencias entre sí:
-// se lanzan de forma asíncrona. DCT directo e inverso tampoco
-// dependen de los anteriores (solo de la imagen de entrada).
+// main
+// Flujo:
+//   1. Carga de imagen
+//   2. Ejecución paralela de tareas independientes (std::async)
+//   3. Sincronización y guardado de resultados
 // ============================================================
 int main(int argc, char **argv) {
     if (argc == 1) {
@@ -211,37 +217,26 @@ int main(int argc, char **argv) {
     int block_size = 8;
     Image<unsigned char> image = load_from_file(argv[1]);
 
-    auto total_start = omp_get_wtime();
-    std::cout << "=== Análisis forense paralelo ===" << std::endl;
-    std::cout << "Hilos OpenMP disponibles: " << omp_get_max_threads() << std::endl;
+    double total_start = omp_get_wtime();
 
-    // Lanzamiento asíncrono: SRM 3x3, SRM 5x5, ELA, DCT inv, DCT directo
-    // son 5 tareas independientes entre sí -> paralelismo funcional
-    auto f_srm3 = std::async(std::launch::async,
-        [&]() { return compute_srm(image, 3); });
+    // Lanzamiento de tareas independientes
+    auto f_srm3 = std::async(std::launch::async, [&]() { return compute_srm(image, 3); });
+    auto f_srm5 = std::async(std::launch::async, [&]() { return compute_srm(image, 5); });
+    auto f_ela  = std::async(std::launch::async, [&]() { return compute_ela(image, 90); });
+    auto f_dct_inv = std::async(std::launch::async, [&]() { return compute_dct(image, block_size, true); });
+    auto f_dct_dir = std::async(std::launch::async, [&]() { return compute_dct(image, block_size, false); });
 
-    auto f_srm5 = std::async(std::launch::async,
-        [&]() { return compute_srm(image, 5); });
-
-    auto f_ela = std::async(std::launch::async,
-        [&]() { return compute_ela(image, 90); });
-
-    auto f_dct_inv = std::async(std::launch::async,
-        [&]() { return compute_dct(image, block_size, true); });
-
-    auto f_dct_dir = std::async(std::launch::async,
-        [&]() { return compute_dct(image, block_size, false); });
-
-    // Recoger resultados y guardar
-    save_to_file("srm_kernel_3x3.png",  f_srm3.get());
-    save_to_file("srm_kernel_5x5.png",  f_srm5.get());
-    save_to_file("ela.png",             f_ela.get());
-    save_to_file("dct_invert.png",      f_dct_inv.get());
-    save_to_file("dct_direct.png",      f_dct_dir.get());
+    // Sincronización y guardado
+    save_to_file("srm_kernel_3x3.png", f_srm3.get());
+    save_to_file("srm_kernel_5x5.png", f_srm5.get());
+    save_to_file("ela.png",            f_ela.get());
+    save_to_file("dct_invert.png",     f_dct_inv.get());
+    save_to_file("dct_direct.png",     f_dct_dir.get());
 
     double total_end = omp_get_wtime();
-    std::cout << "=== Tiempo total: "
+    std::cout << "Tiempo total: "
               << (int)((total_end - total_start) * 1000)
-              << " ms ===" << std::endl;
+              << " ms" << std::endl;
+
     return 0;
 }
