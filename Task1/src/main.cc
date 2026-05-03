@@ -106,9 +106,9 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
     }
 
     auto end = std::chrono::steady_clock::now();
-    std::cout << "[SRM " << kernel_size << "] Tiempo: "
+    std::cout << "[SRM " << kernel_size << "x" << kernel_size << "] Tiempo: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()
-              << " ms" << std::endl;
+              << " ms (hilos: " << omp_get_max_threads() << ")" << std::endl;
     return result;
 }
 
@@ -119,6 +119,7 @@ Image<unsigned char> compute_srm(const Image<unsigned char> &image, int kernel_s
 // ============================================================
 Image<unsigned char> compute_dct(const Image<unsigned char> &image, int block_size, bool invert) {
     auto begin = std::chrono::steady_clock::now();
+    std::cout << "[DCT" << (invert ? " inv" : "") << " " << block_size << "x" << block_size << "] Iniciando..." << std::endl;
 
     Image<float> grayscale = image.convert<float>().to_grayscale();
     std::vector<Block<float>> blocks = grayscale.get_blocks(block_size);
@@ -146,9 +147,9 @@ Image<unsigned char> compute_dct(const Image<unsigned char> &image, int block_si
     Image<unsigned char> result = grayscale.convert<unsigned char>();
 
     auto end = std::chrono::steady_clock::now();
-    std::cout << "[DCT] Tiempo: "
+    std::cout << "[DCT" << (invert ? " inv" : "") << "] Tiempo: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()
-              << " ms" << std::endl;
+              << " ms (hilos: " << omp_get_max_threads() << ")" << std::endl;
 
     return result;
 }
@@ -160,6 +161,7 @@ Image<unsigned char> compute_dct(const Image<unsigned char> &image, int block_si
 // ============================================================
 Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality) {
     auto begin = std::chrono::steady_clock::now();
+    std::cout << "[ELA q=" << quality << "] Iniciando..." << std::endl;
 
     Image<unsigned char> grayscale = image.to_grayscale();
     save_to_file("_temp.jpg", grayscale, quality);
@@ -217,7 +219,9 @@ int main(int argc, char **argv) {
     int block_size = 8;
     Image<unsigned char> image = load_from_file(argv[1]);
 
-    double total_start = omp_get_wtime();
+    auto total_start = omp_get_wtime();
+    std::cout << "=== Análisis forense paralelo ===" << std::endl;
+    std::cout << "Hilos OpenMP disponibles: " << omp_get_max_threads() << std::endl;
 
     // Lanzamiento de tareas independientes
     auto f_srm3 = std::async(std::launch::async, [&]() { return compute_srm(image, 3); });
@@ -234,9 +238,9 @@ int main(int argc, char **argv) {
     save_to_file("dct_direct.png",     f_dct_dir.get());
 
     double total_end = omp_get_wtime();
-    std::cout << "Tiempo total: "
+    std::cout << "=== Tiempo total: "
               << (int)((total_end - total_start) * 1000)
-              << " ms" << std::endl;
+              << " ms ===" << std::endl;
 
     return 0;
 }
